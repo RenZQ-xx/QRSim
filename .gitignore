@@ -1,8 +1,12 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.idea/
 .venv/
 venv/
+tmp/
+output/
+src/*.egg-info/
 src/QRSim/datas/distribution_*.npz
 results/
 shelf/

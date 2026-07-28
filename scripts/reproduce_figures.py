@@ -243,20 +243,35 @@ def _draw_fig4_schematic(axis: plt.Axes) -> None:
     """Draw the asymmetric one-repeater geometry used in fig4(a)."""
 
     node_style = dict(fill=False, linewidth=2.2)
-    for x, color, label in ((0.05, "#0072B2", "Alice"), (0.48, "#7A3DB8", "Repeater"), (0.91, "#0072B2", "Bob")):
+    alice_x, repeater_x, midpoint_x, bob_x = 0.05, 0.36, 0.48, 0.91
+    for x, color, label in (
+        (alice_x, "#0072B2", "Alice"),
+        (repeater_x, "#7A3DB8", "Repeater"),
+        (bob_x, "#0072B2", "Bob"),
+    ):
         axis.add_patch(Rectangle((x - 0.07, 0.58), 0.14, 0.22, edgecolor=color, **node_style))
         axis.text(x, 0.85, label, ha="center", va="bottom", fontsize=9)
-    stations = ((0.27, r"$H_0$"), (0.73, r"$H_1$"))
+    stations = (
+        ((alice_x + repeater_x) / 2, r"$H_0$"),
+        ((repeater_x + bob_x) / 2, r"$H_1$"),
+    )
     for x, label in stations:
         axis.add_patch(Rectangle((x - 0.045, 0.18), 0.09, 0.15, facecolor="#D9EAD3", edgecolor="#6AA84F", lw=1.8))
         axis.text(x, 0.255, label, ha="center", va="center", fontsize=9)
         axis.plot([x, x], [0.33, 0.69], "--", color="0.45", lw=1.5)
-    axis.plot([0.12, 0.41], [0.69, 0.69], "--", color="0.45", lw=1.8)
-    axis.plot([0.55, 0.84], [0.69, 0.69], "--", color="0.45", lw=1.8)
-    axis.text(0.265, 0.73, r"$L_0$", ha="center", fontsize=10)
-    axis.text(0.695, 0.73, r"$L_1$", ha="center", fontsize=10)
-    axis.annotate("", xy=(0.48, 0.48), xytext=(0.40, 0.48), arrowprops=dict(arrowstyle="<->", lw=1.2))
-    axis.text(0.44, 0.43, r"$\Delta L$", ha="center", fontsize=9)
+    axis.plot([alice_x + 0.07, repeater_x - 0.07], [0.69, 0.69], "--", color="0.45", lw=1.8)
+    axis.plot([repeater_x + 0.07, bob_x - 0.07], [0.69, 0.69], "--", color="0.45", lw=1.8)
+    axis.text((alice_x + repeater_x) / 2, 0.73, r"$L_0$", ha="center", fontsize=10)
+    axis.text((repeater_x + bob_x) / 2, 0.73, r"$L_1$", ha="center", fontsize=10)
+
+    # Dimension line from the displaced repeater to the end-node midpoint.
+    # Short arrowheads merged into a black blob at manuscript scale, so use
+    # explicit end ticks and a light midpoint guide instead.
+    axis.plot([midpoint_x, midpoint_x], [0.43, 0.57], ":", color="0.55", lw=1.0)
+    axis.plot([repeater_x, midpoint_x], [0.47, 0.47], color="black", lw=1.0)
+    axis.plot([repeater_x, repeater_x], [0.445, 0.495], color="black", lw=1.0)
+    axis.plot([midpoint_x, midpoint_x], [0.445, 0.495], color="black", lw=1.0)
+    axis.text((repeater_x + midpoint_x) / 2, 0.405, r"$\Delta L$", ha="center", fontsize=9)
     axis.set(xlim=(-0.05, 1.02), ylim=(0.08, 0.95))
     axis.set_aspect("equal")
     axis.axis("off")
@@ -361,6 +376,23 @@ def pi_density(nodes: int, values: np.ndarray) -> np.ndarray:
     raise ValueError("the manuscript gives explicit Pi densities only for N=1,2,3")
 
 
+def full_sample_histogram_weights(samples: np.ndarray, bins: np.ndarray) -> np.ndarray:
+    """Return density weights normalized by every Monte Carlo sample.
+
+    Matplotlib's ``density=True`` renormalizes only the samples inside the
+    displayed bins.  That biases a truncated histogram upward whenever the
+    underlying distribution has probability beyond the plotting window.
+    """
+
+    samples = np.asarray(samples)
+    bin_widths = np.diff(bins)
+    if samples.size == 0:
+        raise ValueError("samples cannot be empty")
+    if not np.allclose(bin_widths, bin_widths[0]):
+        raise ValueError("histogram bins must have uniform width")
+    return np.full(samples.shape, 1.0 / (samples.size * bin_widths[0]), dtype=float)
+
+
 def reproduce_figure_xx(output: Path) -> Path:
     """Monte Carlo check of the analytical continuum densities."""
 
@@ -369,9 +401,23 @@ def reproduce_figure_xx(output: Path) -> Path:
     fig, axes = plt.subplots(2, 3, figsize=(10, 6), sharex=True, sharey=True)
     for column, nodes in enumerate((1, 2, 3)):
         data = MonteCarloSim.load_freq_dist(repeater_nodes=nodes)
-        axes[0, column].hist(data["W"], bins=bins, density=True, color="skyblue", edgecolor="black", lw=0.25)
+        axes[0, column].hist(
+            data["W"],
+            bins=bins,
+            weights=full_sample_histogram_weights(data["W"], bins),
+            color="skyblue",
+            edgecolor="black",
+            lw=0.25,
+        )
         axes[0, column].plot(grid, pi_density(nodes, grid), color="red", lw=1.5)
-        axes[1, column].hist(data["Z"], bins=bins, density=True, color="skyblue", edgecolor="black", lw=0.25)
+        axes[1, column].hist(
+            data["Z"],
+            bins=bins,
+            weights=full_sample_histogram_weights(data["Z"], bins),
+            color="skyblue",
+            edgecolor="black",
+            lw=0.25,
+        )
         axes[1, column].plot(grid, gamma_density(nodes, grid), color="red", lw=1.5)
         axes[0, column].set_title(f"N={nodes}")
         axes[0, column].set_xlim(0, 10)

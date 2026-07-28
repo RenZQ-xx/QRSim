@@ -22,5 +22,9 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-python_files = ["test_waiting_time.py", "test_analytical_model.py"]
+python_files = [
+    "test_waiting_time.py",
+    "test_analytical_model.py",
+    "test_figure_histograms.py",
+]
 addopts = "-q"
