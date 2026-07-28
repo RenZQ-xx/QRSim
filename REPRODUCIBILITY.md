@@ -1,4 +1,4 @@
-# QRSim v1.0.0 reproducibility guide
+# QRSim v1.0.1 reproducibility guide
 
 This package reproduces every computational result used by the manuscript
 “Analytical modeling of single-photon-interference-based quantum repeaters.”
@@ -71,4 +71,3 @@ The tests verify the analytical elementary-link model against the QuTiP
 component model, the X-state swapping recursion, exact completion-time
 expectations, continuum moments, and the arbitrary-length Laplace formula for
 the first three explicit cases.
-
