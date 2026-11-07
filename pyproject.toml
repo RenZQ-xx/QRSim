@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qrsim"
-version = "1.0.1"
+version = "1.1.0"
 description = "Analytical and Monte Carlo model for single-photon-interference quantum repeaters"
 requires-python = ">=3.10"
 dependencies = [

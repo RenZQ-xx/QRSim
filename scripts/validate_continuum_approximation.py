@@ -19,15 +19,9 @@ from QRSim.analytical import homogeneous_chain
 from QRSim.waiting_time import accumulated_storage_rounds
 
 
-PARAMETERS = {
-    "detector_efficiency": 0.9,
-    "dark_count_probability": 1.5e-6,
-    "transmission_without_fiber": 0.08,
-    "attenuation_db_per_km": 0.2,
-    "visibility": 0.9,
-    "coherence_time": 600.0,
-    "swapping_quality": 0.995,
-}
+from reproduce_figures import MANUSCRIPT_PARAMETERS
+
+PARAMETERS = dict(MANUSCRIPT_PARAMETERS)
 
 # Maximum-fidelity points for N=4,5,7,8 and the N=6 point quoted in the
 # abstract. All points belong to the 1000-km scan in manuscript Fig. 7.

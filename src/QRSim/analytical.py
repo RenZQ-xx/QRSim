@@ -17,6 +17,75 @@ from QRSim.waiting_time import expected_completion_round
 
 
 @dataclass(frozen=True)
+class BellDiagonalWeights:
+    """Bell-basis probabilities ordered around the target ``|psi+>``.
+
+    The four entries are the Pauli-error probabilities relative to the target:
+    identity (``psi+``), phase flip (``psi-``), bit flip (``phi+``), and a
+    combined bit/phase flip (``phi-``).
+    """
+
+    psi_plus: float
+    psi_minus: float
+    phi_plus: float
+    phi_minus: float
+
+    @property
+    def probabilities(self) -> np.ndarray:
+        return np.array(
+            [self.psi_plus, self.psi_minus, self.phi_plus, self.phi_minus],
+            dtype=float,
+        )
+
+    @property
+    def parity_contrast(self) -> float:
+        """Odd- versus even-excitation Bell-sector contrast."""
+
+        return self.psi_plus + self.psi_minus - self.phi_plus - self.phi_minus
+
+    @property
+    def phase_contrast_plus(self) -> float:
+        return self.psi_plus - self.psi_minus + self.phi_plus - self.phi_minus
+
+    @property
+    def phase_contrast_minus(self) -> float:
+        return self.psi_plus - self.psi_minus - self.phi_plus + self.phi_minus
+
+    def density_matrix(self) -> np.ndarray:
+        """Return the state in the ``ee, eg, ge, gg`` computational basis."""
+
+        return np.array(
+            [
+                [
+                    (self.phi_plus + self.phi_minus) / 2,
+                    0,
+                    0,
+                    (self.phi_plus - self.phi_minus) / 2,
+                ],
+                [
+                    0,
+                    (self.psi_plus + self.psi_minus) / 2,
+                    (self.psi_plus - self.psi_minus) / 2,
+                    0,
+                ],
+                [
+                    0,
+                    (self.psi_plus - self.psi_minus) / 2,
+                    (self.psi_plus + self.psi_minus) / 2,
+                    0,
+                ],
+                [
+                    (self.phi_plus - self.phi_minus) / 2,
+                    0,
+                    0,
+                    (self.phi_plus + self.phi_minus) / 2,
+                ],
+            ],
+            dtype=float,
+        )
+
+
+@dataclass(frozen=True)
 class ElementaryLinkResult:
     signal_weight: float
     error_weight: float
@@ -51,6 +120,40 @@ class ElementaryLinkResult:
     def delta(self) -> float:
         return 1 - 2 * (self.population_ee + self.population_gg)
 
+    @property
+    def population_single_excitation(self) -> float:
+        return self.population_eg_noise + (self.signal + self.error) / 2
+
+    @property
+    def coherence(self) -> float:
+        return (self.signal - self.error) / 2
+
+    def density_matrix(self) -> np.ndarray:
+        """Return the normalized component-derived elementary X state."""
+
+        b = self.population_single_excitation
+        h = self.coherence
+        return np.array(
+            [
+                [self.population_ee, 0, 0, 0],
+                [0, b, h, 0],
+                [0, h, b, 0],
+                [0, 0, 0, self.population_gg],
+            ],
+            dtype=float,
+        )
+
+    def strict_pauli_twirl(self) -> BellDiagonalWeights:
+        """Return the exact Bell-diagonal Pauli twirl of the X state."""
+
+        even_weight = (self.population_ee + self.population_gg) / 2
+        return BellDiagonalWeights(
+            psi_plus=self.fidelity,
+            psi_minus=self.population_single_excitation - self.coherence,
+            phi_plus=even_weight,
+            phi_minus=even_weight,
+        )
+
 
 @dataclass(frozen=True)
 class ChainResult:
@@ -59,6 +162,94 @@ class ChainResult:
     coherence_factor: float
     elementary_link: ElementaryLinkResult
     repetition_rate: float
+
+
+def fidelity_matched_bell_state(
+    elementary_fidelity: float,
+    model: str,
+) -> BellDiagonalWeights:
+    """Construct a controlled Bell-diagonal reduction at fixed fidelity.
+
+    These states change only the assumed distribution of the infidelity.  The
+    caller retains the component model's heralding probability, waiting-time
+    statistics, memory factor, and local swapping quality.
+    """
+
+    if not 0 <= elementary_fidelity <= 1:
+        raise ValueError("elementary_fidelity must lie in [0, 1]")
+    infidelity = 1 - elementary_fidelity
+    if model == "werner":
+        other = infidelity / 3
+        return BellDiagonalWeights(elementary_fidelity, other, other, other)
+    if model == "phase_only":
+        return BellDiagonalWeights(elementary_fidelity, infidelity, 0.0, 0.0)
+    if model == "bit_only":
+        return BellDiagonalWeights(elementary_fidelity, 0.0, infidelity, 0.0)
+    raise ValueError("model must be 'werner', 'phase_only', or 'bit_only'")
+
+
+def bell_diagonal_chain_fidelity(
+    state: BellDiagonalWeights,
+    *,
+    repeater_nodes: int,
+    coherence_factor: float,
+    swapping_quality: float,
+) -> float:
+    """Propagate a Bell-diagonal link through the homogeneous chain.
+
+    Bell-state errors compose by convolution on the two-bit Pauli group.  The
+    three nontrivial Fourier components are the contrasts below.  Pure memory
+    dephasing leaves the parity contrast unchanged and multiplies both
+    phase-sensitive contrasts by the same accumulated-storage factor.
+    """
+
+    if repeater_nodes < 0:
+        raise ValueError("repeater_nodes cannot be negative")
+    if not 0 <= coherence_factor <= 1:
+        raise ValueError("coherence_factor must lie in [0, 1]")
+    if not 0 <= swapping_quality <= 1:
+        raise ValueError("swapping_quality must lie in [0, 1]")
+    probabilities = state.probabilities
+    if not np.isclose(probabilities.sum(), 1.0, atol=1e-12):
+        raise ValueError("Bell-state probabilities must sum to one")
+    if np.any(probabilities < -1e-12):
+        raise ValueError("Bell-state probabilities cannot be negative")
+
+    link_count = repeater_nodes + 1
+    quality = swapping_quality**repeater_nodes
+    return float(
+        (
+            1
+            + quality
+            * (
+                state.parity_contrast**link_count
+                + coherence_factor
+                * (
+                    state.phase_contrast_plus**link_count
+                    + state.phase_contrast_minus**link_count
+                )
+            )
+        )
+        / 4
+    )
+
+
+def reduced_model_fidelity(
+    elementary_fidelity: float,
+    model: str,
+    *,
+    repeater_nodes: int,
+    coherence_factor: float,
+    swapping_quality: float,
+) -> float:
+    """Return a fidelity-matched reduced model's end-to-end fidelity."""
+
+    return bell_diagonal_chain_fidelity(
+        fidelity_matched_bell_state(elementary_fidelity, model),
+        repeater_nodes=repeater_nodes,
+        coherence_factor=coherence_factor,
+        swapping_quality=swapping_quality,
+    )
 
 
 def no_click_probability(photon_number: int, detector_efficiency: float, dark_count_probability: float) -> float:
@@ -78,6 +269,7 @@ def symmetric_elementary_link(
     detector_efficiency: float,
     dark_count_probability: float,
     visibility: float,
+    phase_coherence: float = 1.0,
 ) -> ElementaryLinkResult:
     """Evaluate the manuscript's symmetric single-click elementary link."""
 
@@ -87,6 +279,7 @@ def symmetric_elementary_link(
         "detector_efficiency": detector_efficiency,
         "dark_count_probability": dark_count_probability,
         "visibility": visibility,
+        "phase_coherence": phase_coherence,
     }.items():
         if not 0 <= value <= 1:
             raise ValueError(f"{name} must lie in [0, 1]")
@@ -112,6 +305,14 @@ def symmetric_elementary_link(
         + no[1] * click[1] * (1 - c) / 2 * eta**2 * pe**2
     )
     heralding = 2 * (signal + error + n_ee + 2 * n_eg + n_gg)
+    # Average a residual relative optical phase, after removing its mean.
+    # This redistributes the two Bell weights but leaves all populations,
+    # two-photon event probabilities, and the heralding probability intact.
+    original_signal, original_error = signal, error
+    signal = ((original_signal + original_error)
+              + phase_coherence * (original_signal - original_error)) / 2
+    error = ((original_signal + original_error)
+             - phase_coherence * (original_signal - original_error)) / 2
     fidelity = (signal + n_eg) / (heralding / 2) if heralding else 0.0
     return ElementaryLinkResult(
         signal_weight=float(signal),
@@ -214,6 +415,7 @@ def homogeneous_chain(
     coherence_time: float,
     swapping_quality: float,
     local_cycle_time_s: float = 50e-6,
+    phase_coherence: float = 1.0,
 ) -> ChainResult:
     """Return fidelity and exact rate for a homogeneous symmetric chain."""
 
@@ -234,6 +436,7 @@ def homogeneous_chain(
         detector_efficiency=detector_efficiency,
         dark_count_probability=dark_count_probability,
         visibility=visibility,
+        phase_coherence=phase_coherence,
     )
     frequency = repetition_rate(link_distance, local_cycle_time_s=local_cycle_time_s)
     expected_rounds = expected_completion_round([link.heralding_probability] * link_count)

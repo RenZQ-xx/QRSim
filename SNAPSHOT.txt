@@ -1,0 +1,4 @@
+QRSim v1.1.0, PRA revision reproducibility.
+Public archive: https://github.com/RenZQ-xx/QRSim/releases/tag/v1.1.0
+Includes revised component models, numerical data and fixed-seed regeneration.
+No manuscript, peer-review correspondence, historical backups, or large Monte Carlo caches.

@@ -15,7 +15,11 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import numpy as np
 
-from QRSim.analytical import homogeneous_chain
+from QRSim.analytical import (
+    bell_diagonal_chain_fidelity,
+    homogeneous_chain,
+    reduced_model_fidelity,
+)
 from QRSim.MonteCarloSim import MonteCarloSim
 from QRSim import HeraldedLink, RelayChain
 
@@ -25,7 +29,8 @@ MANUSCRIPT_PARAMETERS = {
     "dark_count_probability": 1.5e-6,
     "transmission_without_fiber": 0.08,
     "attenuation_db_per_km": 0.2,
-    "visibility": 0.9,
+    "visibility": 0.99,
+    "phase_coherence": math.exp(-0.30**2 / 2),
     "coherence_time": 600.0,
     "swapping_quality": 0.995,
 }
@@ -169,6 +174,311 @@ def reproduce_fig3(output: Path) -> Path:
     fig.tight_layout()
     save_rows(output, "fig3_reproduced.csv", rows)
     return save_figure(fig, output, "fig3_reproduced.png")
+
+
+def _reduced_fidelities(component, repeater_nodes: int) -> dict[str, float]:
+    """Evaluate controlled reductions while retaining all chain statistics."""
+
+    reduced = {
+        model: reduced_model_fidelity(
+            component.elementary_link.fidelity,
+            model,
+            repeater_nodes=repeater_nodes,
+            coherence_factor=component.coherence_factor,
+            swapping_quality=MANUSCRIPT_PARAMETERS["swapping_quality"],
+        )
+        for model in ("werner", "phase_only", "bit_only")
+    }
+    reduced["strict_twirl"] = bell_diagonal_chain_fidelity(
+        component.elementary_link.strict_pauli_twirl(),
+        repeater_nodes=repeater_nodes,
+        coherence_factor=component.coherence_factor,
+        swapping_quality=MANUSCRIPT_PARAMETERS["swapping_quality"],
+    )
+    return reduced
+
+
+def reproduce_reduced_model_comparison(output: Path) -> Path:
+    """Candidate two-panel comparison requested for the PRA revision."""
+
+    distances = np.linspace(100, 1000, 100)
+    excitation_probabilities = np.linspace(0.001, 0.12, 120)
+    distance_rows: list[dict] = []
+    excitation_rows: list[dict] = []
+
+    for nodes in (1, 3, 5):
+        for distance in distances:
+            component = homogeneous_chain(
+                repeater_nodes=nodes,
+                total_distance_km=float(distance),
+                excitation_probability=0.03,
+                **MANUSCRIPT_PARAMETERS,
+            )
+            reduced = _reduced_fidelities(component, nodes)
+            distance_rows.append(
+                {
+                    "repeater_nodes": nodes,
+                    "total_distance_km": float(distance),
+                    "excitation_probability": 0.03,
+                    "elementary_fidelity": component.elementary_link.fidelity,
+                    "component_fidelity": component.fidelity,
+                    "strict_twirl_fidelity": reduced["strict_twirl"],
+                    "werner_fidelity": reduced["werner"],
+                    "phase_only_fidelity": reduced["phase_only"],
+                    "bit_only_fidelity": reduced["bit_only"],
+                    "delta_f_werner": reduced["werner"] - component.fidelity,
+                    "delta_f_phase_only": reduced["phase_only"] - component.fidelity,
+                    "delta_f_bit_only": reduced["bit_only"] - component.fidelity,
+                    "strict_twirl_residual": reduced["strict_twirl"] - component.fidelity,
+                    "rate_hz": component.rate,
+                    "heralding_probability": component.elementary_link.heralding_probability,
+                    "coherence_factor": component.coherence_factor,
+                }
+            )
+
+    nodes = 6
+    for excitation_probability in excitation_probabilities:
+        component = homogeneous_chain(
+            repeater_nodes=nodes,
+            total_distance_km=1000.0,
+            excitation_probability=float(excitation_probability),
+            **MANUSCRIPT_PARAMETERS,
+        )
+        reduced = _reduced_fidelities(component, nodes)
+        excitation_rows.append(
+            {
+                "repeater_nodes": nodes,
+                "total_distance_km": 1000.0,
+                "excitation_probability": float(excitation_probability),
+                "elementary_fidelity": component.elementary_link.fidelity,
+                "component_fidelity": component.fidelity,
+                "strict_twirl_fidelity": reduced["strict_twirl"],
+                "werner_fidelity": reduced["werner"],
+                "phase_only_fidelity": reduced["phase_only"],
+                "bit_only_fidelity": reduced["bit_only"],
+                "delta_f_werner": reduced["werner"] - component.fidelity,
+                "delta_f_phase_only": reduced["phase_only"] - component.fidelity,
+                "delta_f_bit_only": reduced["bit_only"] - component.fidelity,
+                "strict_twirl_residual": reduced["strict_twirl"] - component.fidelity,
+                "rate_hz": component.rate,
+                "heralding_probability": component.elementary_link.heralding_probability,
+                "coherence_factor": component.coherence_factor,
+            }
+        )
+
+    save_rows(output, "reduced_model_distance_scan.csv", distance_rows)
+    save_rows(output, "reduced_model_excitation_scan.csv", excitation_rows)
+
+    summary_rows = []
+    for scan_name, rows, coordinate in (
+        ("distance", distance_rows, "total_distance_km"),
+        ("excitation", excitation_rows, "excitation_probability"),
+    ):
+        for model in ("werner", "phase_only", "bit_only"):
+            for region, selected in (
+                ("full", rows),
+                ("useful_F_component_ge_0.5", [row for row in rows if row["component_fidelity"] >= 0.5]),
+            ):
+                maximum = max(selected, key=lambda row: abs(row[f"delta_f_{model}"]))
+                summary_rows.append(
+                    {
+                        "scan": scan_name,
+                        "model": model,
+                        "region": region,
+                        "max_abs_delta_f": abs(maximum[f"delta_f_{model}"]),
+                        "signed_delta_f": maximum[f"delta_f_{model}"],
+                        "repeater_nodes": maximum["repeater_nodes"],
+                        "coordinate_name": coordinate,
+                        "coordinate_value": maximum[coordinate],
+                        "component_fidelity": maximum["component_fidelity"],
+                    }
+                )
+        strict_maximum = max(rows, key=lambda row: abs(row["strict_twirl_residual"]))
+        summary_rows.append(
+            {
+                "scan": scan_name,
+                "model": "strict_twirl",
+                "region": "full",
+                "max_abs_delta_f": abs(strict_maximum["strict_twirl_residual"]),
+                "signed_delta_f": strict_maximum["strict_twirl_residual"],
+                "repeater_nodes": strict_maximum["repeater_nodes"],
+                "coordinate_name": coordinate,
+                "coordinate_value": strict_maximum[coordinate],
+                "component_fidelity": strict_maximum["component_fidelity"],
+            }
+        )
+        for region, selected in (
+            ("full", rows),
+            ("useful_F_component_ge_0.5", [row for row in rows if row["component_fidelity"] >= 0.5]),
+        ):
+            maximum = max(
+                selected,
+                key=lambda row: abs(row["phase_only_fidelity"] - row["bit_only_fidelity"]),
+            )
+            signed_difference = maximum["phase_only_fidelity"] - maximum["bit_only_fidelity"]
+            summary_rows.append(
+                {
+                    "scan": scan_name,
+                    "model": "phase_only_minus_bit_only",
+                    "region": region,
+                    "max_abs_delta_f": abs(signed_difference),
+                    "signed_delta_f": signed_difference,
+                    "repeater_nodes": maximum["repeater_nodes"],
+                    "coordinate_name": coordinate,
+                    "coordinate_value": maximum[coordinate],
+                    "component_fidelity": maximum["component_fidelity"],
+                }
+            )
+    save_rows(output, "reduced_model_summary.csv", summary_rows)
+    working_point = min(
+        excitation_rows,
+        key=lambda row: abs(row["excitation_probability"] - 0.036),
+    )
+    save_rows(output, "reduced_model_working_point.csv", [working_point])
+
+    fig, axes = plt.subplots(1, 2, figsize=(11.36, 4.0))
+    colors = {1: "black", 3: "#0072B2", 5: "#009E73"}
+    for nodes in (1, 3, 5):
+        selected = [row for row in distance_rows if row["repeater_nodes"] == nodes]
+        x_values = np.array([row["total_distance_km"] for row in selected])
+        y_values = np.array([row["delta_f_werner"] for row in selected])
+        useful = np.array([row["component_fidelity"] >= 0.5 for row in selected])
+        axes[0].plot(
+            x_values,
+            y_values,
+            lw=1.2,
+            color=colors[nodes],
+            ls=":",
+            alpha=0.55,
+        )
+        axes[0].plot(
+            x_values,
+            np.where(useful, y_values, np.nan),
+            lw=1.8,
+            color=colors[nodes],
+            label=f"N = {nodes}",
+        )
+    axes[0].axhline(0, color="0.6", lw=0.8)
+    axes[0].set(
+        xlabel="Total distance (km)",
+        ylabel=r"$F_{\mathrm{Werner}}-F_{\mathrm{component}}$",
+        xlim=(100, 1000),
+    )
+    axes[0].legend()
+    axes[0].set_title("(a)", loc="left")
+
+    model_styles = {
+        "werner": ("#0072B2", "Werner"),
+        "phase_only": ("#D55E00", "phase-flip only"),
+        "bit_only": ("#009E73", "bit-flip only"),
+    }
+    for model, (color, label) in model_styles.items():
+        axes[1].plot(
+            [row["excitation_probability"] for row in excitation_rows],
+            [row[f"delta_f_{model}"] for row in excitation_rows],
+            lw=1.5,
+            color=color,
+            label=label,
+        )
+    useful_excitation = [
+        row["excitation_probability"]
+        for row in excitation_rows
+        if row["component_fidelity"] >= 0.5
+    ]
+    axes[1].axvspan(
+        excitation_probabilities[0],
+        min(useful_excitation),
+        color="0.9",
+        zorder=-1,
+    )
+    axes[1].axvspan(
+        max(useful_excitation),
+        excitation_probabilities[-1],
+        color="0.9",
+        zorder=-1,
+    )
+    axes[1].axhline(0, color="0.6", lw=0.8)
+    axes[1].set(
+        xlabel=r"Excitation probability $p_e$",
+        ylabel=r"$F_{\mathrm{reduced}}-F_{\mathrm{component}}$",
+        xlim=(excitation_probabilities[0], excitation_probabilities[-1]),
+    )
+    axes[1].legend()
+    axes[1].set_title("(b)", loc="left")
+    fig.tight_layout()
+    return save_figure(fig, output, "reduced_model_comparison_candidate.png")
+
+
+def reproduce_component_sensitivity(output: Path) -> Path:
+    """One-at-a-time sensitivity at the representative 1000-km point."""
+
+    baseline_parameters = dict(MANUSCRIPT_PARAMETERS)
+    cases = [
+        ("baseline", "Baseline", None, None),
+        ("no_dark_counts", "No dark counts", "dark_count_probability", 0.0),
+        ("perfect_visibility", "Perfect interference", "visibility", 1.0),
+        ("perfect_phase", "Ideal phase reference", "phase_coherence", 1.0),
+        ("ideal_memory", "Ideal memories", "coherence_time", math.inf),
+        ("perfect_swaps", "Perfect local swaps", "swapping_quality", 1.0),
+        ("ideal_detector", "Ideal detector", "detector_efficiency", 1.0),
+        ("improved_optical_interface", "Improved optical interface", "transmission_without_fiber", 0.16),
+    ]
+    evaluated = []
+    for case_id, label, parameter, value in cases:
+        parameters = dict(baseline_parameters)
+        if parameter is not None:
+            parameters[parameter] = value
+        result = homogeneous_chain(
+            repeater_nodes=6,
+            total_distance_km=1000.0,
+            excitation_probability=0.036,
+            **parameters,
+        )
+        evaluated.append((case_id, label, parameter, value, result))
+
+    baseline = evaluated[0][-1]
+    rows = []
+    for case_id, label, parameter, value, result in evaluated:
+        rows.append(
+            {
+                "case": case_id,
+                "modification": label,
+                "parameter": parameter or "none",
+                "value": "baseline" if parameter is None else value,
+                "fidelity": result.fidelity,
+                "delta_fidelity": result.fidelity - baseline.fidelity,
+                "rate_hz": result.rate,
+                "rate_ratio": result.rate / baseline.rate,
+                "heralding_probability": result.elementary_link.heralding_probability,
+                "elementary_fidelity": result.elementary_link.fidelity,
+                "coherence_factor": result.coherence_factor,
+            }
+        )
+    save_rows(output, "component_sensitivity.csv", rows)
+
+    visibility_rows = []
+    for visibility in (0.90, 0.95, 0.98, 0.99, 1.0):
+        parameters = {**baseline_parameters, "visibility": visibility}
+        result = homogeneous_chain(
+            repeater_nodes=6,
+            total_distance_km=1000.0,
+            excitation_probability=0.036,
+            **parameters,
+        )
+        visibility_rows.append(
+            {
+                "visibility": visibility,
+                "fidelity": result.fidelity,
+                "delta_fidelity": result.fidelity - baseline.fidelity,
+                "rate_hz": result.rate,
+                "rate_ratio": result.rate / baseline.rate,
+                "heralding_probability": result.elementary_link.heralding_probability,
+                "elementary_fidelity": result.elementary_link.fidelity,
+                "coherence_factor": result.coherence_factor,
+            }
+        )
+    save_rows(output, "visibility_sensitivity.csv", visibility_rows)
+    return output / "component_sensitivity.csv"
 
 
 def reproduce_fig4_legacy(output: Path) -> Path:
@@ -316,6 +626,7 @@ def reproduce_fig4(output: Path) -> Path:
                     fiber_attenuation_coefficient=MANUSCRIPT_PARAMETERS["attenuation_db_per_km"],
                     distance=float(distance),
                     visibility=MANUSCRIPT_PARAMETERS["visibility"],
+                    phase_coherence=MANUSCRIPT_PARAMETERS["phase_coherence"],
                 )
                 link.generate_entanglement(float(pe))
                 links.append(link)
@@ -437,6 +748,8 @@ FIGURES = {
     "fig3": reproduce_fig3,
     "fig4_legacy": reproduce_fig4_legacy,
     "Figure_xx": reproduce_figure_xx,
+    "reduced_models": reproduce_reduced_model_comparison,
+    "component_sensitivity": reproduce_component_sensitivity,
 }
 DEFAULT_FIGURES = ("fig4", "fig2", "fig3", "Figure_xx")
 
@@ -462,6 +775,10 @@ def main() -> None:
         required_waiting_time_data.update(range(3, 9))
     if "Figure_xx" in selected_figures:
         required_waiting_time_data.update((1, 2, 3))
+    if "reduced_models" in selected_figures:
+        required_waiting_time_data.update((1, 3, 5, 6))
+    if "component_sensitivity" in selected_figures:
+        required_waiting_time_data.add(6)
     ensure_waiting_time_data(required_waiting_time_data)
     for name in selected_figures:
         FIGURES[name](args.output)

@@ -23,8 +23,12 @@ from QRSim.waiting_time import (
     sample_waiting_times,
 )
 from QRSim.analytical import (
+    BellDiagonalWeights,
     ChainResult,
     ElementaryLinkResult,
+    bell_diagonal_chain_fidelity,
+    fidelity_matched_bell_state,
     homogeneous_chain,
+    reduced_model_fidelity,
     symmetric_elementary_link,
 )

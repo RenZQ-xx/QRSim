@@ -1,8 +1,9 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite the associated manuscript."
 title: "QRSim: component-to-chain modeling of single-photon-interference quantum repeaters"
-version: 1.0.1
-date-released: 2026-07-28
+version: 1.1.0
+date-released: 2026-11-07
+url: "https://github.com/RenZQ-xx/QRSim/releases/tag/v1.1.0"
 authors:
   - family-names: Ren
     given-names: Zhong-Qi

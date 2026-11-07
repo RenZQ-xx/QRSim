@@ -1,7 +1,7 @@
 from cmath import sqrt, exp
 from numbers import Real
 
-from qutip import basis, tensor, ket2dm, Qobj
+from qutip import basis, tensor, ket2dm, Qobj, qeye, sigmaz
 
 ket0, ket1 = [basis(2, i) for i in range(2)]
 d00 = ket2dm(tensor(ket0, ket0))
@@ -39,6 +39,7 @@ class HeraldedLink:
                  coherence_time: None | float or [float] = None,
                  state_leakage_coefficient: float = 0.,
                  include_generation_round_dephasing: bool = False,
+                 phase_coherence: float = 1.0,
                  ) -> None:
 
         self.state_leakage_coefficient = state_leakage_coefficient
@@ -71,6 +72,9 @@ class HeraldedLink:
             raise ValueError("visibility must be a scalar in [0, 1]")
         self.visibility = float(visibility)
         self.phase_shift = phase_shift
+        if not isinstance(phase_coherence, Real) or not 0 <= phase_coherence <= 1:
+            raise ValueError("phase_coherence must be a scalar in [0, 1]")
+        self.phase_coherence = float(phase_coherence)
         self.repetition_rate = 1 / (
                  2 * max(distance) / HeraldedLink.LIGHT_SPEED + 50e-6) if not repetition_rate else repetition_rate
 
@@ -128,6 +132,22 @@ class HeraldedLink:
         self.herald_state_set["psi+"] = HeraldedLink.deal_with_phase_shift(self.herald_state_set["psi+"], self.phase_shift)
         self.herald_state_set["psi-"] = HeraldedLink.deal_with_phase_shift(self.herald_state_set["psi-"],
                                                                            self.phase_shift)
+        # Average independent residual phase noise after removing the known mean.
+        # This channel changes coherence only, preserving heralding probabilities.
+        phase_flip = tensor(sigmaz(), qeye(2))
+        for outcome in ("psi+", "psi-"):
+            rho = self.herald_state_set[outcome]
+            self.herald_state_set[outcome] = (
+                (1 + self.phase_coherence) * rho
+                + (1 - self.phase_coherence) * phase_flip * rho * phase_flip
+            ) / 2
+        # RelayChain consumes the outcome-weighted ensemble, so keep it in
+        # sync with the normalized states after phase correction/averaging.
+        for index, outcome in enumerate(("psi+", "psi-")):
+            self.herald_state_assemble[outcome] = (
+                self.herald_state_set[outcome]
+                * self.herald_prob_set[index] / self.herald_prob
+            )
 
         if self.include_generation_round_dephasing:
             self.deal_with_decoherence()

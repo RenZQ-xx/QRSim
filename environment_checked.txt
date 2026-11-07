@@ -1,0 +1,7 @@
+Python 3.11.7
+numpy==1.26.4
+matplotlib==3.10.6
+qutip==5.1.1
+seaborn==0.13.2
+pytest==8.4.1
+setuptools==80.9.0
